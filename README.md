@@ -11,6 +11,8 @@ and 8.x releases (branches `PHP-X.Y.Z-CVE-2026-109618-109619`) and the unpatched
    VS2015 (v140) for 7.0/7.1 and VS2017 (v141) for 7.2-7.4. 8.0/8.1 use VS2019 (v142), which the
    `windows-2022` image has. The VS2015 compiler cannot use the image's newest Windows SDK, so the
    7.0/7.1 jobs build against a Windows 10 SDK (10.0.19041 or older; installed if missing).
+   7.0.0-7.0.12 also get the generated-parser fix of 7.0.13 (62bed405da9: `ZEND_API` on the bison 3
+   `zendparse()` prototype), patched and unpatched builds alike; the release branches are unchanged.
 3. Builds the core with the CLI and CGI SAPIs and the session extension
    (`configure --disable-all --enable-cli --enable-cgi --enable-session`, plus `--disable-zts` for NTS).
 4. Runs the checks of the fix (`ci/checks.py`): version string, the out-of-memory exit, the

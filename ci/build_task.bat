@@ -28,6 +28,19 @@ if not exist Makefile (
 	exit /b 3
 )
 
+rem Bison 3 declares zendparse() in the generated header without ZEND_API, which VS2015 rejects
+rem (C2375). 7.0.13 added the fix to the Makefile (62bed405da9); do the same for older releases.
+findstr /c:"ZEND_API int zendparse" win32\build\Makefile >nul
+if not errorlevel 1 goto parser_ok
+echo Applying the zendparse export fix of 62bed405da9 to the generated parser
+nmake /NOLOGO Zend\zend_language_parser.c
+if %errorlevel% neq 0 exit /b 3
+sed -i "s,^int zendparse\(.*\),ZEND_API int zendparse\1,g" Zend/zend_language_parser.c
+sed -i "s,^int zendparse\(.*\),ZEND_API int zendparse\1,g" Zend/zend_language_parser.h
+sed -i "s,^#ifndef YYTOKENTYPE,#include \"zend.h\"\n#ifndef YYTOKENTYPE,g" Zend/zend_language_parser.h
+findstr /n /c:"ZEND_API int zendparse" Zend\zend_language_parser.h || exit /b 3
+:parser_ok
+
 nmake /NOLOGO > "%LOG_DIR%\nmake.log" 2>&1
 set RC=%errorlevel%
 type "%LOG_DIR%\nmake.log"
