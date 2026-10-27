@@ -1,7 +1,9 @@
 @echo off
-rem Runs inside the PHP SDK shell (phpsdk-<crt>-x64.bat -s <toolset> -t ci\build_task.bat),
-rem from the PHP source directory. Needs THREAD_SAFE (1/0), OBJ_DIR and LOG_DIR.
+rem Runs inside the PHP SDK shell (phpsdk-<crt>-x64.bat -s <toolset> -t ci\build_task.bat, or
+rem vcvarsall plus bin\phpsdk_setvars.bat), from the PHP source directory.
+rem Needs THREAD_SAFE (1/0), OBJ_DIR and LOG_DIR.
 
+echo Windows SDK: %WindowsSDKVersion%
 echo Compiler:
 cl 2>&1 | findstr /i "version"
 echo Linker:

@@ -9,7 +9,8 @@ and 8.x releases (branches `PHP-X.Y.Z-CVE-2026-109618-109619`) and the unpatched
 1. Checks out the source, the CI scripts and the PHP SDK (`php-sdk-2.3.0`).
 2. Installs the Visual Studio toolset the line was released with, when the runner lacks it:
    VS2015 (v140) for 7.0/7.1 and VS2017 (v141) for 7.2-7.4. 8.0/8.1 use VS2019 (v142), which the
-   `windows-2022` image has.
+   `windows-2022` image has. The VS2015 compiler cannot use the image's newest Windows SDK, so the
+   7.0/7.1 jobs build against a Windows 10 SDK (10.0.19041 or older; installed if missing).
 3. Builds the core with the CLI and CGI SAPIs and the session extension
    (`configure --disable-all --enable-cli --enable-cgi --enable-session`, plus `--disable-zts` for NTS).
 4. Runs the checks of the fix (`ci/checks.py`): version string, the out-of-memory exit, the

@@ -61,7 +61,8 @@ def main(selection):
             releases.append(t)
         else:
             sys.exit(f"unknown selection token: {t}")
-    releases = sorted(set(releases), key=ver, reverse=True)
+    # oldest first: their jobs install a Visual Studio toolset and take longest
+    releases = sorted(set(releases), key=ver)
     if not releases:
         sys.exit("no releases selected")
 

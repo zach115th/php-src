@@ -79,13 +79,7 @@ jobs:
         if: matrix.component != ''
         shell: pwsh
         run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          Write-Host "Visual Studio: $vs"
-          Set-Location "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
-          $a = @('/c', 'vs_installer.exe', 'modify', '--installPath', "`"$vs`"", '--add', '${{ matrix.component }}', '--quiet', '--norestart', '--nocache')
-          $p = Start-Process -FilePath cmd.exe -ArgumentList $a -Wait -PassThru -WindowStyle Hidden
-          Write-Host "vs_installer exit code: $($p.ExitCode)"
-          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { exit 1 }
+          & ./ci-root/ci/vs_add.ps1 '${{ matrix.component }}'
 
       - name: Select the toolset
         shell: pwsh
@@ -96,14 +90,38 @@ jobs:
             $cl = "${env:ProgramFiles(x86)}\Microsoft Visual Studio 14.0\VC\bin\amd64\cl.exe"
             if (-not (Test-Path $cl)) { Write-Host "VS2015 (v140) compiler not found at $cl"; exit 1 }
             $ts = '14.0'
+            # The VS2015 compiler cannot use the newest Windows SDK headers (ucrt\wchar.h calls
+            # _mm_loadu_si64, which it does not declare), so pick a Windows 10 SDK, 10.0.19041 or older
+            # if there is one, and pass it to vcvarsall.
+            $kits = "${env:ProgramFiles(x86)}\Windows Kits\10"
+            function Find-Sdk {
+              Get-ChildItem "$kits\Include" -Directory |
+                Where-Object { $_.Name -match '^10\.0\.\d+\.0$' -and
+                  (Test-Path "$kits\Lib\$($_.Name)\um\x64\kernel32.lib") -and (Test-Path "$kits\Lib\$($_.Name)\ucrt\x64\ucrt.lib") -and
+                  (Test-Path "$($_.FullName)\ucrt\wchar.h") -and
+                  -not (Select-String -Path "$($_.FullName)\ucrt\wchar.h" -Pattern '_mm_loadu_si64' -SimpleMatch -Quiet) } |
+                Sort-Object { [version]$_.Name }
+            }
+            Write-Host "Windows SDKs: $((Get-ChildItem "$kits\Include" -Directory).Name -join ', ')"
+            $sdks = @(Find-Sdk)
+            if (-not $sdks) {
+              & ./ci-root/ci/vs_add.ps1 Microsoft.VisualStudio.Component.Windows10SDK.19041
+              $sdks = @(Find-Sdk)
+            }
+            if (-not $sdks) { Write-Host "no Windows SDK usable with VS2015"; exit 1 }
+            $old = @($sdks | Where-Object { [version]$_.Name -le [version]'10.0.19041.0' })
+            $winsdk = if ($old) { $old[-1].Name } else { $sdks[-1].Name }
+            Write-Host "Using Windows SDK $winsdk (usable: $($sdks.Name -join ', '))"
+            "WINSDK=$winsdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } else {
             $dirs = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Where-Object { $_.Name -like "$want*" } | Sort-Object Name
             Write-Host "MSVC toolsets: $((Get-ChildItem "$vs\VC\Tools\MSVC" -Directory).Name -join ', ')"
             if (-not $dirs) { Write-Host "no $want* toolset installed"; exit 1 }
             $ts = $dirs[-1].Name
           }
-          Write-Host "Using toolset $ts with the ${{ matrix.starter }} SDK starter"
+          Write-Host "Using toolset $ts"
           "TOOLSET=$ts" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "VCVARSALL=$vs\VC\Auxiliary\Build\vcvarsall.bat" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build
         shell: cmd
@@ -111,7 +129,16 @@ jobs:
           if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
           if not exist "%OBJ_DIR%" mkdir "%OBJ_DIR%"
           cd src
+          if defined WINSDK goto winsdk
           call ..\sdk\phpsdk-${{ matrix.starter }}-x64.bat -s %TOOLSET% -t ..\ci-root\ci\build_task.bat
+          goto built
+          :winsdk
+          rem the SDK starter cannot pass a Windows SDK version to vcvarsall: set up its shell here
+          set "VSCMD_START_DIR=%CD%"
+          set "__VSCMD_ARG_NO_LOGO=yes"
+          echo vcvarsall amd64 %WINSDK% -vcvars_ver=%TOOLSET%
+          cmd /c ""%VCVARSALL%" amd64 %WINSDK% -vcvars_ver=%TOOLSET% && ..\sdk\bin\phpsdk_setvars.bat && ..\ci-root\ci\build_task.bat"
+          :built
           if %errorlevel% neq 0 exit /b 1
           dir /s /b "%OBJ_DIR%\php.exe" || (echo no php.exe was built & exit /b 1)
 
