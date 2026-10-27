@@ -1,0 +1,148 @@
+name: Windows builds (CVE-2026-109618/109619)
+run-name: Windows builds of the CVE-2026-109618/109619 patch releases (${{ inputs.releases || 'list' }})
+
+# Builds the patched 7.x/8.x releases (PHP-X.Y.Z-CVE-2026-109618-109619) and the unpatched
+# releases (tag php-X.Y.Z) with MSVC, thread-safe and non-thread-safe, runs the fix's checks
+# and a test subset on each, and compares patched with unpatched in the summary job.
+on:
+  push:
+    branches: [ci/windows-cve]
+    paths: ['.github/workflows/windows-cve.yml', 'ci/**']
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: "'list' (ci/releases.txt), a line like '7.4', or releases like '7.4.33 8.1.34'; add ts-only, nts-only or patched-only to narrow"
+        required: false
+        default: list
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: Select releases
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.m.outputs.include }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: m
+        env:
+          SELECTION: ${{ inputs.releases || 'list' }}
+        run: python3 ci/matrix.py "$SELECTION" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: matrix
+    runs-on: windows-2022
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+    env:
+      OBJ_DIR: C:\obj
+      LOG_DIR: ${{ github.workspace }}\out
+      THREAD_SAFE: ${{ matrix.ts == 'ts' && '1' || '0' }}
+    steps:
+      - name: Git line endings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: ci-root
+
+      - name: Checkout ${{ matrix.side }} source (${{ matrix.ref }})
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: src
+          fetch-depth: 1
+
+      - name: Checkout PHP SDK
+        uses: actions/checkout@v4
+        with:
+          repository: php/php-sdk-binary-tools
+          ref: php-sdk-2.3.0
+          path: sdk
+
+      - name: Install the ${{ matrix.crt }} toolset (${{ matrix.component }})
+        if: matrix.component != ''
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Write-Host "Visual Studio: $vs"
+          Set-Location "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $a = @('/c', 'vs_installer.exe', 'modify', '--installPath', "`"$vs`"", '--add', '${{ matrix.component }}', '--quiet', '--norestart', '--nocache')
+          $p = Start-Process -FilePath cmd.exe -ArgumentList $a -Wait -PassThru -WindowStyle Hidden
+          Write-Host "vs_installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { exit 1 }
+
+      - name: Select the toolset
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $want = '${{ matrix.toolset }}'
+          if ($want -eq '14.0') {
+            $cl = "${env:ProgramFiles(x86)}\Microsoft Visual Studio 14.0\VC\bin\amd64\cl.exe"
+            if (-not (Test-Path $cl)) { Write-Host "VS2015 (v140) compiler not found at $cl"; exit 1 }
+            $ts = '14.0'
+          } else {
+            $dirs = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Where-Object { $_.Name -like "$want*" } | Sort-Object Name
+            Write-Host "MSVC toolsets: $((Get-ChildItem "$vs\VC\Tools\MSVC" -Directory).Name -join ', ')"
+            if (-not $dirs) { Write-Host "no $want* toolset installed"; exit 1 }
+            $ts = $dirs[-1].Name
+          }
+          Write-Host "Using toolset $ts with the ${{ matrix.starter }} SDK starter"
+          "TOOLSET=$ts" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build
+        shell: cmd
+        run: |
+          if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+          cd src
+          call ..\sdk\phpsdk-${{ matrix.starter }}-x64.bat -s %TOOLSET% -t ..\ci-root\ci\build_task.bat
+          if %errorlevel% neq 0 exit /b 1
+
+      - name: Checks and tests
+        if: success() || failure()
+        shell: pwsh
+        run: >
+          python ci-root/ci/checks.py --src "${{ github.workspace }}\src" --obj "$env:OBJ_DIR"
+          --release ${{ matrix.release }} --ts ${{ matrix.ts }} --side ${{ matrix.side }}
+          --out "$env:LOG_DIR" --log "$env:LOG_DIR\nmake.log"
+
+      - name: Upload results
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.release }}-${{ matrix.ts }}-${{ matrix.side }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summary:
+    name: Summary
+    needs: build
+    if: success() || failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: results
+          pattern: result-*
+      - name: Compare patched with unpatched builds
+        run: python3 ci/summary.py results
+      - name: Upload summary
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary
+          path: |
+            results/summary.md
+            results/summary.json
