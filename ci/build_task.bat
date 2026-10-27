@@ -20,6 +20,11 @@ if "%THREAD_SAFE%"=="0" set CONF=%CONF% --disable-zts
 echo configure.bat %CONF%
 cmd /c configure.bat %CONF%
 if %errorlevel% neq 0 exit /b 3
+rem configure.bat does not always report its errors in the exit code
+if not exist Makefile (
+	echo configure did not produce a Makefile
+	exit /b 3
+)
 
 nmake /NOLOGO > "%LOG_DIR%\nmake.log" 2>&1
 set RC=%errorlevel%

@@ -18,6 +18,11 @@ on:
 permissions:
   contents: read
 
+# a new push or run replaces the one in progress
+concurrency:
+  group: windows-cve
+  cancel-in-progress: true
+
 jobs:
   matrix:
     name: Select releases
@@ -104,9 +109,11 @@ jobs:
         shell: cmd
         run: |
           if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+          if not exist "%OBJ_DIR%" mkdir "%OBJ_DIR%"
           cd src
           call ..\sdk\phpsdk-${{ matrix.starter }}-x64.bat -s %TOOLSET% -t ..\ci-root\ci\build_task.bat
           if %errorlevel% neq 0 exit /b 1
+          dir /s /b "%OBJ_DIR%\php.exe" || (echo no php.exe was built & exit /b 1)
 
       - name: Checks and tests
         if: success() || failure()
